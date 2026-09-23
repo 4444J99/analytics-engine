@@ -313,6 +313,23 @@ python src/aggregator.py --input data/raw/ --output data/
 python src/dashboard.py --input data/ --output docs/dashboard/
 ```
 
+### Publishing & Verification
+
+To publish the metrics artifact package and verify installation/run check:
+
+```bash
+# 1. Build the release package artifacts (wheel and sdist)
+python -m build
+
+# 2. Install the package locally
+pip install .
+
+# 3. Verify entry points execution
+analytics-aggregate --help
+analytics-dashboard --help
+analytics-signals --help
+```
+
 ### Testing
 
 ```bash
