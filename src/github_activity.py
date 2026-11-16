@@ -16,6 +16,8 @@ from pathlib import Path
 
 from src.config import ORG_TO_ORGAN, GitHubConfig
 
+EVENTS_PER_PAGE = 100
+
 
 def fetch_github_api(config: GitHubConfig, endpoint: str) -> list | dict:
     """Make an authenticated GET request to the GitHub API."""
@@ -33,34 +35,58 @@ def count_org_events(config: GitHubConfig, org: str, since: date) -> dict:
     """Count commits, PRs, and releases for an org since the given date.
 
     Uses the /orgs/{org}/events endpoint (public events, last 90 days).
+    Follows result pages while a page is full, so in-window events past the
+    first page are not silently dropped. Event IDs are deduplicated across
+    pages in case a boundary event repeats.
     """
     commits = 0
     prs = 0
     releases = 0
+    seen_ids: set = set()
+    since_str = since.isoformat()
 
     try:
-        events = fetch_github_api(config, f"/orgs/{org}/events?per_page=100")
-        if not isinstance(events, list):
-            events = []
+        page = 1
+        while True:
+            events = fetch_github_api(
+                config,
+                f"/orgs/{org}/events?per_page={EVENTS_PER_PAGE}&page={page}",
+            )
+            if not isinstance(events, list):
+                events = []
+
+            page_has_in_window = False
+            for event in events:
+                event_id = event.get("id")
+                if event_id is not None:
+                    if event_id in seen_ids:
+                        continue
+                    seen_ids.add(event_id)
+
+                created = event.get("created_at", "")[:10]
+                if created < since_str:
+                    continue
+                page_has_in_window = True
+
+                event_type = event.get("type", "")
+                if event_type == "PushEvent":
+                    payload = event.get("payload", {})
+                    commits += payload.get("size", 0)
+                elif event_type == "PullRequestEvent":
+                    action = event.get("payload", {}).get("action", "")
+                    if action in ("opened", "closed"):
+                        prs += 1
+                elif event_type == "ReleaseEvent":
+                    releases += 1
+
+            # Stop on a short/empty page. Also stop when the whole page
+            # predates the window: pages are newest-first, so nothing later
+            # is in-window either and the request count stays bounded.
+            if len(events) < EVENTS_PER_PAGE or not page_has_in_window:
+                break
+            page += 1
     except (urllib.error.URLError, urllib.error.HTTPError):
         return {"commits": 0, "prs": 0, "releases": 0}
-
-    since_str = since.isoformat()
-    for event in events:
-        created = event.get("created_at", "")[:10]
-        if created < since_str:
-            continue
-
-        event_type = event.get("type", "")
-        if event_type == "PushEvent":
-            payload = event.get("payload", {})
-            commits += payload.get("size", 0)
-        elif event_type == "PullRequestEvent":
-            action = event.get("payload", {}).get("action", "")
-            if action in ("opened", "closed"):
-                prs += 1
-        elif event_type == "ReleaseEvent":
-            releases += 1
 
     return {"commits": commits, "prs": prs, "releases": releases}
 
