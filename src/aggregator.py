@@ -247,6 +247,7 @@ def build_system_report(
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "status": "ok",
         "period": {
             "start": period_start,
             "end": period_end,
